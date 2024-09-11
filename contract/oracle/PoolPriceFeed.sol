@@ -14,6 +14,9 @@ contract PoolPriceFeed is IPoolPriceFeed, Admin {
 
     uint256 constant public MAX_ADJUSTMENT_BASIS_POINTS = 20;
     uint256 public MAX_SPREAD_BASIS_POINTS = 50;
+    uint256 public PRICE_PRECISION = 10 ** 30;
+    uint256 public ONE_USD = PRICE_PRECISION;
+    uint256 public BASIS_POINTS_DIVISOR = 10000; 
 
     bool public isAmmEnabled;
     bool favorPrimaryPrice = false;
