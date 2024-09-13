@@ -24,7 +24,8 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
     uint256 public totalRewards;
     uint256 public paidout;
     address public _owner;
-
+    Pool[] public pools;    
     // User deposits in the liquidity pool
     mapping(uint256 => mapping(address => User)) userInfo;
+    
 }
