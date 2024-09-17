@@ -24,10 +24,27 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
     uint256 public totalRewards;
     uint256 public paidout;
     address public _owner;
+    bool public withdrawPaused;
+    bool public claimPaused;
 
     Pool[] public pools;    
     // User deposits in the liquidity pool
     mapping(uint256 => mapping(address => User)) userInfo;
+
+    modifier withdrawUnPaused () {
+        require(!withdrawPaused, "withdraw is Paused");
+        _;
+    }
+
+    modifier claimUnPaused () {
+        require(!claimPaused, "claim is Paused");
+        _;
+    }
+
+    modifier onlyOwner() {
+        require(_owner == msg.sender, "Invalid Operator");
+        _;
+    }
     
     function initialize(address _b2stAddress, uint256 _rewardPerSecond, uint256 _startTimeStamp, uint256 _endTimeStamp) external initializer {
         require(_startTimeStamp < _endTimeStamp, "Invalid time");
@@ -41,7 +58,54 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
         __UUPSUpgradeable_init();
     }
 
-    //Update liquidity pool data and call when liquidity changes.
+    // Add liquidity pool
+    function addPool() external onlyOwner {
+        
+    }
+
+////////////////////////////////////////    Staking    ////////////////////////////////////////
+
+    function pauseWithdraw() external onlyOwner withdrawUnPaused {
+        withdrawPaused = true;
+
+        emit WithdrawPaused();
+    }
+
+    function pauseClaim() external onlyOwner claimUnPaused {
+        claimPaused = true;
+
+        emit ClaimPaused();
+    }
+
+    function unPauseWithdraw() external onlyOwner {
+        require(withdrawPaused, "withdraw is unPaused");
+        withdrawPaused = false;
+
+        emit WithdrawUnPaused();
+    }
+
+    function unPauseClaim() external onlyOwner {
+        require(claimPaused, "claim is unPaused");
+        claimPaused = false;
+
+        emit ClaimUnPaused();
+    }
+
+    function massUpdatePools() internal {
+        for (uint i = 0; i < pools.length; ++i) {
+            updatePool(i);
+        }
+    }
+
+    // Inject rewardToken into the pool
+    function fund(uint256 _amount) external onlyOwner {
+        require(block.timestamp < endTimeStamp, "Time is too late");
+        totalRewards += _amount;
+        endTimeStamp += _amount / rewardPerSecond;
+        ierc20B2.transferFrom(msg.sender, address(this), _amount);
+    }
+
+    // Update liquidity pool data and call when liquidity changes.
     function updatePool(uint256 pid) internal {
         Pool storage pool = pools[pid];
 
@@ -68,17 +132,17 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
         emit UpdatePool(pid, pool.lastRewardBlock, reward);
     }
 
-    function Stake(uint256 pid, uint256 amount) external {
+    function Stake(uint256 pid, uint256 amount) external claimUnPaused {
         require(block.timestamp < endTimeStamp, "Staking has ended");
         Pool storage pool = pools[pid];
         require(amount >= pool.minDepositAmount, "Amount less than limit");
 
         User storage user = userInfo[pid][msg.sender];
 
-        //Update data every time user stake
+        // Update data every time user stake
         updatePool(pid);
 
-        //claim reward
+        // claim reward
         if(user.stAmount > 0) {
             uint256 reward = pending(pid, msg.sender);
             user.finishedAmount += reward;
@@ -97,7 +161,7 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
         emit Stake(pid, amount);
     }
 
-    function Withdraw(uint256 pid, uint256 amount) external {
+    function Withdraw(uint256 pid, uint256 amount) external claimUnPaused withdrawUnPaused {
         require(amount > 0, "Invalid Amount");
         User storage user = userInfo[pid][msg.sender];
         require(amount <= user.stAmount, "The balance less than amount");
@@ -119,7 +183,7 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
         emit Withdraw(pid, amount);
     }
 
-    function claimReward(uint256 pid) external {
+    function claimReward(uint256 pid) external claimUnPaused {
         User storage user = userInfo[pid][msg.sender];
         
         uint256 reward = pending(pid, msg.sender);
@@ -131,11 +195,14 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
     }
 
     function pending(uint256 pid, address user) internal view returns(uint256) {
-        User storage user = userInfo[pid][user];
-        Pool storage pool = pools[pid];
+        User memory user = userInfo[pid][user];
+        Pool memory pool = pools[pid];
 
         uint256 accRewardPerST = pool.accRewardPerST;
         uint256 totalSupply = pool.stTokenAmount;
-        if(totalSupply > 0 && block.timestamp > pool.lastRewardBlock && )
+
+        return user.stAmount * (accRewardPerST) / (1e36) - (user.finishedAmount);
     }
+
+////////////////////////////////////////  Borrowing and Loaning  ////////////////////////////////////////
 }
