@@ -46,10 +46,10 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
         _;
     }
     
-    function initialize(address _b2stAddress, uint256 _rewardPerSecond, uint256 _startTimeStamp, uint256 _endTimeStamp) external initializer {
+    function initialize(address _rewardstAddress, uint256 _rewardPerSecond, uint256 _startTimeStamp, uint256 _endTimeStamp) external initializer {
         require(_startTimeStamp < _endTimeStamp, "Invalid time");
         require(_endTimeStamp > block.timestamp, "Invalid end time");
-        rewardToken = IERC20(_b2stAddress);
+        rewardToken = IERC20(_rewardstAddress);
         rewardPerSecond = _rewardPerSecond;
         startTimeStamp = _startTimeStamp;
         endTimeStamp = _endTimeStamp;
@@ -59,7 +59,7 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
     }
 
     // Add liquidity pool
-    function addPool() external onlyOwner {
+    function addPool(address tokeAddr, uint256 poolWeight, ) external onlyOwner {
         
     }
 
