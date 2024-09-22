@@ -22,14 +22,19 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
     uint256 public rewardPerSecond;
     uint256 public totalAllocPoint;
     uint256 public totalRewards;
+    uint256 public lendingInterestRate; // Annual interest rate
     uint256 public paidout;
-    address public _owner;
+    address private _owner;
     bool public withdrawPaused;
     bool public claimPaused;
 
     Pool[] public pools;    
     // User deposits in the liquidity pool
     mapping(uint256 => mapping(address => User)) userInfo;
+    // Record the added liquidity pool
+    mapping(address => bool) poolList;
+    // Record user lending information
+    mapping(address => mapping(address => LendingInfo)) lendingUserInfo;
 
     modifier withdrawUnPaused () {
         require(!withdrawPaused, "withdraw is Paused");
@@ -59,8 +64,44 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
     }
 
     // Add liquidity pool
-    function addPool(address tokeAddr, uint256 poolWeight, ) external onlyOwner {
-        
+    function addPool(address _tokeAddr, uint256 _poolWeight, uint256 _minDepositAmount, uint256 _minUnstakeAmount, bool isUpdata) external onlyOwner {
+        require(_tokeAddr != address(0), "Invalid token address");
+        require(_poolWeight > 0, "Pool weight must be greater than zero");
+        require(_minDepositAmount, "Min deposit amount must be greater than zero");
+        require(_minUnstakeAmount, "Min unstake amount must be greater than zero");
+        require(!poolList[_tokeAddr], "Liquidity pools have been added");
+
+        if(isUpdata) {
+            massUpdatePools();
+        }
+
+        uint256 _lastRewardBlock = block.timestamp > startTimeStamp ? block.timestamp : startTimeStamp;
+
+        pools.push(Pool({
+            stTokenAddress: _tokeAddr,
+            poolWeight: _poolWeight,
+            lastRewardBlock: _lastRewardBlock,
+            accRewardPerST: 0,
+            stTokenAmount: 0,
+            minDepositAmount: _minDepositAmount,
+            minUnstakeAmount: _minUnstakeAmount,
+            lendingAmount: 0,
+            borrowingAmount: 0,
+            lendingRewardAmount: 0,
+            borrowingRewardAmount: 0,
+        }));
+
+        totalAllocPoint += _poolWeight;
+        poolList[_tokeAddr] = true;
+    }
+
+    function setPoolWeight(uint256 pid, uint256 newPoolWeight, bool isUpdata) public onlyOwner {
+        if(isUpdata) {
+            massUpdatePools();
+        }
+        Pool storage pool = pools[pid];
+        totalAllocPoint = totalAllocPoint - pool.poolWeight + newPoolWeight;
+        pool.poolWeight = newPoolWeight;
     }
 
 ////////////////////////////////////////    Staking    ////////////////////////////////////////
@@ -98,11 +139,11 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
     }
 
     // Inject rewardToken into the pool
-    function fund(uint256 _amount) external onlyOwner {
+    function fund(uint256 amount) external onlyOwner {
         require(block.timestamp < endTimeStamp, "Time is too late");
-        totalRewards += _amount;
-        endTimeStamp += _amount / rewardPerSecond;
-        ierc20B2.transferFrom(msg.sender, address(this), _amount);
+        totalRewards += amount;
+        endTimeStamp += amount / rewardPerSecond;
+        ierc20B2.transferFrom(msg.sender, address(this), amount);
     }
 
     // Update liquidity pool data and call when liquidity changes.
@@ -132,7 +173,7 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
         emit UpdatePool(pid, pool.lastRewardBlock, reward);
     }
 
-    function Stake(uint256 pid, uint256 amount) external claimUnPaused {
+    function stake(uint256 pid, uint256 amount) external claimUnPaused {
         require(block.timestamp < endTimeStamp, "Staking has ended");
         Pool storage pool = pools[pid];
         require(amount >= pool.minDepositAmount, "Amount less than limit");
@@ -161,7 +202,7 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
         emit Stake(pid, amount);
     }
 
-    function Withdraw(uint256 pid, uint256 amount) external claimUnPaused withdrawUnPaused {
+    function withdraw(uint256 pid, uint256 amount) external claimUnPaused withdrawUnPaused {
         require(amount > 0, "Invalid Amount");
         User storage user = userInfo[pid][msg.sender];
         require(amount <= user.stAmount, "The balance less than amount");
@@ -205,4 +246,33 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
     }
 
 ////////////////////////////////////////  Borrowing and Loaning  ////////////////////////////////////////
+
+    function depositLend(uint256 pid, uint256 amount) external nonReentrant {
+        Pool storage pool = pools[pid];
+        LendingInfo storage lendingInfo = lendingUserInfo[pool.stTokenAddress][msg.sender];
+
+        // If the user already has a loan record, calculate the interest 
+        if(lendingInfo.lendingAmount > 0) {
+            uint256 lendingTimePeriod = block.timestamp - lendingInfo.lendingLastTime;
+            lendingInfo.accumulateInterest += lendingInfo.lendingAmount * lendingTimePeriod * lendingInterestRate * 1e36 / (365 * 24 * 3600);
+        }
+
+        lendingInfo.lendingAmount += amount;
+        lendingInfo.lendingLastTime = block.timestamp;
+        pool.lendingAmount += amount;
+
+        IERC20(pool.stTokenAddress).transferFrom(msg.sender, address(this), amount);
+
+        emit DepositLend(pid, amount);
+    }
+    // Withdraw staked token for lending 
+    function withdrawToLend(uint256 pid, uint256 amount) external nonReentrant withdrawUnPaused {
+        User storage user = userInfo[pid][msg.sender];
+        require(user.stAmount > amount, "Staked amount less than amount");
+
+        Pool storage pool = pools[pid];
+        updatePool(pid);
+
+        uint256 reward = 
+    }
 }

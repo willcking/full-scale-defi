@@ -11,7 +11,7 @@ interface IMaxStake {
         address [] salesRegistered;
     }
 
-        struct Pool {
+    struct Pool {
         address stTokenAddress;
         uint256 poolWeight;
         uint256 lastRewardBlock;
@@ -25,6 +25,14 @@ interface IMaxStake {
         uint256 borrowingRewardAmount;
     }
 
+    struct LendingInfo {
+        uint256 lendingRewardAmount;
+        uint256 lendingAmount;
+        uint256 lendingLastTime;
+        uint256 accumulateInterest;
+        uint256 accumulateRewardInterest;
+    }
+
     event Stake(uint256 pid,uint256 amount);
     event Withdraw(uint256 pid,uint256 amount);
     event Reward(uint256 pid);
@@ -34,7 +42,7 @@ interface IMaxStake {
     event ClaimUnPaused();
     event UpdatePool(uint256 pid, uint256 lastRewardBlock, uint256 reward);
     event DepositLend(uint256 pid,uint amount);
-    event WithdrawLend(uint256 pid,uint amount);
+    event WithdrawToLend(uint256 pid,uint amount);
     event ClaimLend(uint256 pid);
     event DepositBorrow(uint256 pid,uint amount);
     event WithdrawBorrow(uint256 pid,uint amount);
