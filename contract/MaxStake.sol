@@ -273,6 +273,26 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
         Pool storage pool = pools[pid];
         updatePool(pid);
 
-        uint256 reward = 
+        uint256 reward = pending(pid, msg.sender);
+        user.finishedAmount += reward;
+        user.pendingAmount = 0;
+        rewardToken.transfer(msg.sender, reward);
+
+        user.stAmount -= amount;
+        pool.stTokenAmount -= amount;
+
+        LendingInfo storage lendingInfo = lendingUserInfo[pool.stTokenAddress][msg.sender];
+
+        // If the user already has a loan record, calculate the interest 
+        if(lendingInfo.lendingAmount > 0) {
+            uint256 lendingTimePeriod = block.timestamp - lendingInfo.lendingLastTime;
+            lendingInfo.accumulateInterest += lendingInfo.lendingAmount * lendingTimePeriod * lendingInterestRate * 1e36 / (365 * 24 * 3600);
+        }
+
+        lendingInfo.lendingAmount += amount;
+        lendingInfo.lendingLastTime = block.timestamp;
+        pool.lendingAmount += amount;
+
+        emit WithdrawToLend(pid, amount);
     }
 }
