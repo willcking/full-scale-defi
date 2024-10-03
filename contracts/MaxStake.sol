@@ -16,7 +16,6 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
     IERC20 public rewardToken;
     IERC20 public interestToken;
 
-    uint256 public initInterest;
     uint256 public startTimeStamp;
     uint256 public endTimeStamp;
     uint256 public rewardPerSecond;
@@ -56,7 +55,24 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
         require(_owner == msg.sender, "Invalid Operator");
         _;
     }
+
+    modifier validateLend(uint256 _amount) {
+        require(address(interestToken) != address(0), "the interestToken may not init");
+        require(_amount >= minLending, "lending Amount must great than minLending");
+        _;
+    }
+
+    modifier validateBorrow(uint256 _amount) {
+        require(address(interestToken) != address(0), "the interestToken may not init");
+        require(borrowingInterestRate > 0, "the lendingInterestRate may not init");
+        _;
+    }
+
     
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
+
+    }
+
     function initialize(address _rewardstAddress, uint256 _rewardPerSecond, uint256 _startTimeStamp, uint256 _endTimeStamp) external initializer {
         require(_startTimeStamp < _endTimeStamp, "Invalid time");
         require(_endTimeStamp > block.timestamp, "Invalid end time");
@@ -99,14 +115,6 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
         poolList[_tokeAddr] = true;
     }
 
-    function setPoolWeight(uint256 pid, uint256 newPoolWeight, bool isUpdata) public onlyOwner {
-        if(isUpdata) {
-            massUpdatePools();
-        }
-        Pool storage pool = pools[pid];
-        totalAllocPoint = totalAllocPoint - pool.poolWeight + newPoolWeight;
-        pool.poolWeight = newPoolWeight;
-    }
 
 ////////////////////////////////////////    Staking    ////////////////////////////////////////
 
@@ -150,6 +158,16 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
         rewardToken.transferFrom(msg.sender, address(this), amount);
     }
 
+    function setPoolWeight(uint256 pid, uint256 newPoolWeight, bool isUpdata) public onlyOwner {
+        if(isUpdata) {
+            massUpdatePools();
+        }
+        Pool storage pool = pools[pid];
+        totalAllocPoint = totalAllocPoint - pool.poolWeight + newPoolWeight;
+        pool.poolWeight = newPoolWeight;
+    }
+
+
     // Update liquidity pool data and call when liquidity changes.
     function updatePool(uint256 pid) internal {
         Pool storage pool = pools[pid];
@@ -175,6 +193,16 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
         pool.lastRewardBlock = block.timestamp;
 
         emit UpdatePool(pid, pool.lastRewardBlock, reward);
+    }
+
+    function pending(uint256 pid, address userAddress) internal view returns(uint256) {
+        User memory user = userInfo[pid][userAddress];
+        Pool memory pool = pools[pid];
+
+        uint256 accRewardPerST = pool.accRewardPerST;
+        uint256 totalSupply = pool.stTokenAmount;
+
+        return user.stAmount * (accRewardPerST) / (1e36) - (user.finishedAmount);
     }
 
     function stake(uint256 pid, uint256 amount) external claimUnPaused {
@@ -206,7 +234,7 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
         emit Stake(pid, amount);
     }
 
-    function withdraw(uint256 pid, uint256 amount) external claimUnPaused withdrawUnPaused {
+    function withdraw(uint256 pid, uint256 amount) external withdrawUnPaused {
         require(amount > 0, "Invalid Amount");
         User storage user = userInfo[pid][msg.sender];
         require(amount <= user.stAmount, "The balance less than amount");
@@ -239,22 +267,34 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
         emit Reward(pid);
     }
 
-    function pending(uint256 pid, address userAddress) internal view returns(uint256) {
-        User memory user = userInfo[pid][userAddress];
-        Pool memory pool = pools[pid];
-
-        uint256 accRewardPerST = pool.accRewardPerST;
-        uint256 totalSupply = pool.stTokenAmount;
-
-        return user.stAmount * (accRewardPerST) / (1e36) - (user.finishedAmount);
-    }
-
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
-
-    }
 ////////////////////////////////////////  Borrowing and Loaning  ////////////////////////////////////////
 
-    function depositLend(uint256 pid, uint256 amount) external nonReentrant {
+    function setInterestParams(address _interestToken, uint256 _minLending, uint256 _collateralRate, uint256 _mincollateral) external onlyOwner {
+        require(_interestToken != address(0), "invalid Token address");
+        require(address(interestToken) == address(0), "the interestToken have alread seted");
+
+        interestToken = IERC20(_interestToken);
+        minLending = _minLending;
+        collateralRate = _collateralRate;
+        minCollateral = _mincollateral;
+
+    }
+
+    function setInterestRate(uint256 _lendingInterestRate, uint256 _borrowingInterestRate) external onlyOwner {
+        require(_lendingInterestRate < _borrowingInterestRate, "the borrowingInterest must great than lendingInterest");
+        require(_lendingInterestRate > 0 && _borrowingInterestRate > 0, "the interest must great than 0");
+
+        lendingInterestRate = _lendingInterestRate;
+        borrowingInterestRate = _borrowingInterestRate;
+    }
+
+    function getCanBorrowAmt(uint256 pid) public view returns(uint256) {
+        User storage user = userInfo[pid][msg.sender];
+        uint256 userCanBorrowAmt = user.stAmount * collateralRate /100;
+        return userCanBorrowAmt;
+    }
+
+    function depositLend(uint256 pid, uint256 amount) external nonReentrant validateLend(amount) {
         Pool storage pool = pools[pid];
         LendingInfo storage lendingInfo = lendingUserInfo[pool.stTokenAddress][msg.sender];
 
@@ -273,7 +313,7 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
         emit DepositLend(pid, amount);
     }
     // Withdraw staked token for lending 
-    function withdrawToLend(uint256 pid, uint256 amount) external nonReentrant withdrawUnPaused {
+    function withdrawToLend(uint256 pid, uint256 amount) external nonReentrant withdrawUnPaused validateLend(amount) {
         User storage user = userInfo[pid][msg.sender];
         require(user.stAmount > amount, "Staked amount less than amount");
 
@@ -303,7 +343,7 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
         emit WithdrawToLend(pid, amount);
     }
 
-    function borrow(uint256 pid, uint256 amount) external nonReentrant {
+    function borrow(uint256 pid, uint256 amount) external nonReentrant validateBorrow(amount) {
         Pool storage pool = pools[pid];
         uint256 canBorrowAmt = getCanBorrowAmt(pid);
 
@@ -365,31 +405,5 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
         IERC20(pool.stTokenAddress).transferFrom(msg.sender, address(this), borrowingAmount);
 
         emit Redeem(pid, borrowingAmount, accumulateInterest, msg.sender);
-    }
-    function setInterestParams(address _interestToken, uint256 _initInterest, uint256 _minLending, uint256 _collateralRate, uint256 _mincollateral) external onlyOwner {
-        require(_interestToken != address(0), "invalid Token address");
-        require(address(interestToken) == address(0), "the interestToken have alread seted");
-        require(_initInterest > 0, "initInterest must great than 0");
-
-        interestToken = IERC20(_interestToken);
-        initInterest = _initInterest;
-        minLending = _minLending;
-        collateralRate = _collateralRate;
-        minCollateral = _mincollateral;
-
-    }
-
-    function setInterestRate(uint256 _lendingInterestRate, uint256 _borrowingInterestRate) external onlyOwner {
-        require(_lendingInterestRate < _borrowingInterestRate, "the borrowingInterest must great than lendingInterest");
-        require(_lendingInterestRate > 0 && _borrowingInterestRate > 0, "the interest must great than 0");
-
-        lendingInterestRate = _lendingInterestRate;
-        borrowingInterestRate = _borrowingInterestRate;
-    }
-
-    function getCanBorrowAmt(uint256 pid) public view returns(uint256) {
-        User storage user = userInfo[pid][msg.sender];
-        uint256 userCanBorrowAmt = user.stAmount * collateralRate /100;
-        return userCanBorrowAmt;
     }
 }

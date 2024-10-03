@@ -7,8 +7,6 @@ interface IMaxStake {
         uint256 stAmount;
         uint256 finishedAmount;
         uint256 pendingAmount;
-        uint256 tokensUnlockTime;
-        address [] salesRegistered;
     }
 
     struct Pool {
