@@ -21,16 +21,18 @@ interface IMaxStake {
         uint256 minUnstakeAmount;
         uint256 lendingAmount;
         uint256 borrowingAmount;
-        uint256 lendingRewardAmount;
-        uint256 borrowingRewardAmount;
     }
 
     struct LendingInfo {
-        uint256 lendingRewardAmount;
         uint256 lendingAmount;
         uint256 lendingLastTime;
         uint256 accumulateInterest;
-        uint256 accumulateRewardInterest;
+    }
+
+    struct BorrowingInfo {
+        uint256 borrowingAmount;
+        uint256 borrowLastTime;
+        uint256 accumulateInterest;
     }
 
     event Stake(uint256 pid,uint256 amount);
@@ -44,9 +46,9 @@ interface IMaxStake {
     event DepositLend(uint256 pid,uint amount);
     event WithdrawToLend(uint256 pid,uint amount);
     event ClaimLend(uint256 pid);
-    event DepositBorrow(uint256 pid,uint amount);
+    event Borrow(uint256 pid,uint amount);
     event WithdrawBorrow(uint256 pid,uint amount);
     event ClaimBorrow(uint256 pid);
-    event Redeem(uint256 pid,uint256 borrowAmt,uint256 collateralReward,uint256 accumulateInterest,address receiver);
-    event Settle(uint256 pid,uint256 landingAmount,uint256 landingRewardAmount,uint256 totalInterest,address receiver);
+    event Redeem(uint256 pid,uint256 borrowingAmount,uint256 accumulateInterest,address receiver);
+    event Settle(uint256 pid,uint256 landingAmount,uint256 totalInterest,address receiver);
 }

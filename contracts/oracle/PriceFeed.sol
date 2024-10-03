@@ -18,7 +18,7 @@ contract PriceFeed is IPriceFeed {
     }
 
     constructor () {
-        isAdmin[msg.sender] = bool;
+        isAdmin[msg.sender] = true;
     }
 
     function setAdmin(address _account, bool _isAdmin) public onlyAdmin {

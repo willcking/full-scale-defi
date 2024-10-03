@@ -7,12 +7,12 @@ import "../interface/draft-IERC6093.sol";
 import "../utils/Ownable.sol";
 
 contract ERC20 is IERC20,Ownable,IERC20Errors {
-    string public name;
-    string public symbol;
-    uint256 public totalSupply;
+    string public _name;
+    string public _symbol;
+    uint256 public _totalSupply;
     uint256 public decemals;
 
-    mapping(address => uint256) public balances;
+    mapping(address => uint256) public _balances;
     mapping(address account => mapping(address spender => uint256)) private _allowances;
 
     constructor(string memory name_, string memory symbol_) {
