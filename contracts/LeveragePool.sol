@@ -17,6 +17,7 @@ contract LeveragePool is ReentrancyGuard, Admin, Initializable, UUPSUpgradeable,
         uint256 positionSize;
         uint256 collateral;
         uint256 averagePrice;
+        uint256 entryFundingRate;
         uint256 lastUpdateTime;
     }
 
@@ -40,7 +41,14 @@ contract LeveragePool is ReentrancyGuard, Admin, Initializable, UUPSUpgradeable,
     mapping(address => bool) isLiquidator;
     mapping(address => uint256) minProfitBasisPoints;
     mapping(address => uint256) tokenDecimal;
-    mapping(bytes32=>Position) positions;
+    mapping(bytes32 => Position) positions;
+    mapping(address => uint256) tokenBalance;
+    mapping(address => uint256) cumulativeFundingRates;
+    mapping(address => uint256) reservedAmounts;
+    mapping(address => uint256) poolAmounts;
+
+    event IncreaseReservedAmount(address collateralToken, uint256 amount);
+    event IncreasePosition(bytes32 key, address _account, address _collateralToken, address _indexToken, uint256 _collateralDeltaUsd, uint256 _sizeDelta, bool _isLong, uint256 _price, uint256 fee);
  
     function initialize(address _iPoolPriceFeed, uint256 _maxGasPreice, bool _shouldUpdate, bool _includeAmmPrice, bool _inPrivateLiquidationMode) external initializer {
         iPoolPriceFeed = IPoolPriceFeed(_iPoolPriceFeed);
@@ -146,6 +154,41 @@ contract LeveragePool is ReentrancyGuard, Admin, Initializable, UUPSUpgradeable,
         bytes key = getPositionKey(account, collateralToken, indexToken, isLong);
         Position storage position = positions[key];
         
+        uint256 price = isLong ? getMaxPrice(indexToken) : getMinPrice(indexToken);
+
+        if(position.positionSize == 0) {
+            position.averagePrice =  price;
+        }
+
+        if(position.positionSize > 0 && sizeDelta > 0) {
+            //todo
+        }
+
+        uint256 fee = collectMarginFee(collateralToken, sizeDelta, position.positionSize, position.entryFundingRate);
+        uint256 collateralDelta = transferIn(collateralToken);
+        uint256 collateralDeltaUsd = TokenToUsd(collateralToken, collateralDelta);
+        position.collateral = position.collateral + collateralDeltaUsd;
+        require(position.collateral >= fee, "collateral must great than fee");
+        position.collateral = position.collateral - fee;
+        position.entryFundingRate = cumulativeFundingRates[collateralToken];
+        position.positionSize = position.positionSize + sizeDelta;
+        position.lastUpdateTime = block.timestamp;
+
+        require(position.positionSize > 0, 'positionSize cant be 0');
+        validatePosition(position.positionSize, position.collateral); 
+        validateLiquidation(account, collateralToken, indexToken, isLong);
+        uint256 reserveDelta = usdToTokenMax(collateralToken, sizeDelta);
+        position.reserveAmount = position.reserveAmount + reserveDelta;
+        increaseReservedAmount(collateralToken, reserveDelta);
+
+        if(isLong) {
+            //todo
+        } else {
+            //todo
+        }
+
+        emit IncreasePosition(key, account, collateralToken, indexToken, collateralDeltaUsd, sizeDelta, isLong, price, fee);
+        emit UpdatePosition(key, position.positionSize, position.collateral, position.averagePrice, position.entryFundingRate, position.reserveAmount, price);
     }
 
     function decreasePosition() external nonReentrant {
@@ -156,8 +199,42 @@ contract LeveragePool is ReentrancyGuard, Admin, Initializable, UUPSUpgradeable,
         
     }
 
+    function increaseReservedAmount(address collateralToken, uint256 amount) private {
+        reservedAmounts[collateralToken] += amount;
+        require(reservedAmounts[collateralToken] <= poolAmounts[collateralToken],"the reserve amount must less or equal than pool amount");
+        emit IncreaseReservedAmount(collateralToken, amount);
+    }
+
+    function getMaxPrice(address indexToken) internal view returns(uint256) {
+        return iPoolPriceFeed.getPrice(indexToken , true, includeAmmPrice);
+    }
+
+    function getMinPrice(address indexToken) internal view returns(uint256) {
+        return iPoolPriceFeed.getPrice(indexToken , false, includeAmmPrice);
+    }
+
     function validateGasPrice() private view {
         require(tx.gasprice < maxGasPrice, 'the gas overFlow');
+    }
+
+    function transferIn(address collateralToken) private returns(uint256) {
+        uint256 preBalance = tokenBalance[collateralToken];
+        uint256 currentBalance = IERC20(collateralToken).balanceOf(address(this));
+
+        tokenBalance[collateralToken] = currentBalance;
+        return currentBalance-preBalance;
+    }
+    
+    function validatePosition(uint256 _positionSize, uint256 _collateral) private pure {
+        if (_positionSize == 0) {
+            require(_collateral == 0, "init Position collateral must be 0");
+            return;
+        }
+        require(_positionSize >= _collateral, "the positionSize should great than collateral");
+    }    
+
+    function collectMarginFee(address collateralToken, uint256 sizeDelta, uint256 positionSize, uint256 entryFundingRate) private returns(uint256) {
+        //todo
     }
 
     function validateTokens(address collateralToken, address indexToken, bool isLong) private view {
@@ -175,7 +252,29 @@ contract LeveragePool is ReentrancyGuard, Admin, Initializable, UUPSUpgradeable,
     }
 
     function getPositionKey(address account, address collateralToken, address indexToken, bool isLong) internal pure returns(bytes32) {
-        return keccak256(abi.encodePacked(account, collateralToken, indexToken, isLong))
+        return keccak256(abi.encodePacked(account, collateralToken, indexToken, isLong));
+    }
+
+    function TokenToUsd(address collateralToken, uint256 amount) internal view returns(uint256) {
+        if(amount == 0){
+            return 0;
+        }
+        uint256 price = getMinPrice(collateralToken);
+        uint256 decimal = tokenDecimal[collateralToken];
+        return price * amount / (10 ** decimal);
+    }
+
+    function usdToTokenMax(address collateralToken, uint256 amount) internal view returns (uint256){
+        if(amount == 0){
+            return 0;
+        }
+        uint256 price = getMinPrice(collateralToken);
+        uint256 decimal = tokenDecimal[collateralToken];
+        return amount * (10 ** decimal) / price;
+    }
+
+    function validateLiquidation(address account, address collateralToken, address indexToken, bool isLong) internal view returns (uint256,uint256){
+        //todo
     }
 
     function updateCumulativeFundingRate(address collateralToken) internal {
