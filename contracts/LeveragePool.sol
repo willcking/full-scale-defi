@@ -11,6 +11,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
+
 contract LeveragePool is ReentrancyGuard, Admin, Initializable, UUPSUpgradeable, AccessControlUpgradeable, PausableUpgradeable {
     
     struct Position {
@@ -22,6 +23,10 @@ contract LeveragePool is ReentrancyGuard, Admin, Initializable, UUPSUpgradeable,
     }
 
     IPoolPriceFeed iPoolPriceFeed;
+
+    uint256 public constant BASIS_POINTS_DIVISOR = 10000;
+    uint256 public constant FUNDING_RATE_PRECISION = 1000000;
+
     bool public isLeverageEnabled;
     bool public shouldUpdate;
     bool public includeAmmPrice;
@@ -46,9 +51,22 @@ contract LeveragePool is ReentrancyGuard, Admin, Initializable, UUPSUpgradeable,
     mapping(address => uint256) cumulativeFundingRates;
     mapping(address => uint256) reservedAmounts;
     mapping(address => uint256) poolAmounts;
+    mapping(address => uint256) lastFundingTimes;
+    mapping(address => uint256) feeReserves;
+    mapping(address => uint256) guaranteedUsds;
+    mapping(address => uint256) globalShortSizes;
+    mapping(address => uint256) globalShortAveragePrices; 
 
+    event UpdateFundingRate(address collateralToken, uint256 cumulativeFundRate);
     event IncreaseReservedAmount(address collateralToken, uint256 amount);
-    event IncreasePosition(bytes32 key, address _account, address _collateralToken, address _indexToken, uint256 _collateralDeltaUsd, uint256 _sizeDelta, bool _isLong, uint256 _price, uint256 fee);
+    event IncreaseGuaranteedUsds(address collateralToken, uint256 amount);
+    event DecreaseGuaranteedUsds(address collateralToken, uint256 amount);
+    event IncreasePoolAmount(address collateralToken, uint256 amount);
+    event DecreasePoolAmount(address collateralToken, uint256 amount);
+    event IncreaseGlobalShortSize(address collateralToken, uint256 amount);
+    event CollectMarginFees(address collateralToken, uint256 feeUsd, uint256 feeTokens);
+    event UpdatePosition(bytes32 key, uint256 positionSize, uint256 collateral, uint256 averagePrice, uint256 entryFundingRate, uint256 reserveAmount, uint256 price);
+    event IncreasePosition(bytes32 key, address _account, address collateralToken, address indexToken, uint256 collateralDeltaUsd, uint256 sizeDelta, bool isLong, uint256 price, uint256 fee);
  
     function initialize(address _iPoolPriceFeed, uint256 _maxGasPreice, bool _shouldUpdate, bool _includeAmmPrice, bool _inPrivateLiquidationMode) external initializer {
         iPoolPriceFeed = IPoolPriceFeed(_iPoolPriceFeed);
@@ -161,12 +179,12 @@ contract LeveragePool is ReentrancyGuard, Admin, Initializable, UUPSUpgradeable,
         }
 
         if(position.positionSize > 0 && sizeDelta > 0) {
-            //todo
+            position.averagePrice = getNextAveragePrice(indexToken, position.positionSize, position.averagePrice, isLong, price, sizeDelta, position.lastUpdateTime);
         }
 
         uint256 fee = collectMarginFee(collateralToken, sizeDelta, position.positionSize, position.entryFundingRate);
         uint256 collateralDelta = transferIn(collateralToken);
-        uint256 collateralDeltaUsd = TokenToUsd(collateralToken, collateralDelta);
+        uint256 collateralDeltaUsd = tokenToUsdMin(collateralToken, collateralDelta);
         position.collateral = position.collateral + collateralDeltaUsd;
         require(position.collateral >= fee, "collateral must great than fee");
         position.collateral = position.collateral - fee;
@@ -182,9 +200,24 @@ contract LeveragePool is ReentrancyGuard, Admin, Initializable, UUPSUpgradeable,
         increaseReservedAmount(collateralToken, reserveDelta);
 
         if(isLong) {
-            //todo
+            // guaranteedUsd stores the sum of (position.size - position.collateral) for all positions
+            // if a fee is charged on the collateral then guaranteedUsd should be increased by that fee amount
+            // since (position.size - position.collateral) would have increased by `fee`
+            increaseGuaranteedUsd(collateralToken, sizeDelta + fee);
+            decreaseGuaranteedUsd(collateralToken, collateralDeltaUsd);
+            // treat the deposited collateral as part of the pool
+            increasePoolAmount(collateralToken, collateralDelta);
+            // fees need to be deducted from the pool since fees are deducted from position.collateral
+            // and collateral is treated as part of the pool
+            decreasePoolAmount(collateralToken, usdToTokenMin(collateralToken, fee));
         } else {
-            //todo
+            // Update short global average price
+            if (globalShortSizes[indexToken] == 0) {
+                globalShortAveragePrices[indexToken] = price;
+            } else {
+                globalShortAveragePrices[indexToken] = getNextGlobalShortAveragePrice(indexToken, price, sizeDelta);
+            }
+            increaseGlobalShortSize(indexToken, sizeDelta);
         }
 
         emit IncreasePosition(key, account, collateralToken, indexToken, collateralDeltaUsd, sizeDelta, isLong, price, fee);
@@ -203,6 +236,31 @@ contract LeveragePool is ReentrancyGuard, Admin, Initializable, UUPSUpgradeable,
         reservedAmounts[collateralToken] += amount;
         require(reservedAmounts[collateralToken] <= poolAmounts[collateralToken],"the reserve amount must less or equal than pool amount");
         emit IncreaseReservedAmount(collateralToken, amount);
+    }
+
+    function increaseGuaranteedUsd(address collateralToken, uint256 amount) private {
+        guaranteedUsds[collateralToken] += amount;
+        emit IncreaseGuaranteedUsds(collateralToken, amount);
+    }
+
+    function decreaseGuaranteedUsd(address collateralToken, uint256 amount) private {
+        guaranteedUsds[collateralToken] -= amount;
+        emit DecreaseGuaranteedUsds(collateralToken, amount);
+    }
+
+    function increasePoolAmount(address collateralToken, uint256 amount) private {
+        poolAmounts[collateralToken] += amount;
+        emit IncreasePoolAmount(collateralToken, amount);
+     }
+
+    function decreasePoolAmount(address collateralToken, uint256 amount) private {
+        poolAmounts[collateralToken] -= amount;
+        emit DecreasePoolAmount(collateralToken, amount);
+     }
+
+    function increaseGlobalShortSize(address collateralToken, uint256 amount) private {
+        globalShortSizes[collateralToken] += amount;
+        emit IncreaseGlobalShortSize(collateralToken,amount);
     }
 
     function getMaxPrice(address indexToken) internal view returns(uint256) {
@@ -225,16 +283,25 @@ contract LeveragePool is ReentrancyGuard, Admin, Initializable, UUPSUpgradeable,
         return currentBalance-preBalance;
     }
     
-    function validatePosition(uint256 _positionSize, uint256 _collateral) private pure {
-        if (_positionSize == 0) {
-            require(_collateral == 0, "init Position collateral must be 0");
+    function validatePosition(uint256 positionSize, uint256 collateral) private pure {
+        if (positionSize == 0) {
+            require(collateral == 0, "init Position collateral must be 0");
             return;
         }
-        require(_positionSize >= _collateral, "the positionSize should great than collateral");
+        require(positionSize >= collateral, "the positionSize should great than collateral");
     }    
 
     function collectMarginFee(address collateralToken, uint256 sizeDelta, uint256 positionSize, uint256 entryFundingRate) private returns(uint256) {
-        //todo
+        uint256 feeUsd = getPositionFee(sizeDelta);
+        uint256 fundingFee = getFundingFee(collateralToken, positionSize, entryFundingRate);
+
+        feeUsd = feeUsd-fundingFee;
+
+        uint256 feeTokens = usdToTokenMin(collateralToken, feeUsd);
+        feeReserves[collateralToken] = feeReserves[collateralToken] + feeTokens;
+
+        emit CollectMarginFees(collateralToken, feeUsd, feeTokens);
+        return feeUsd;
     }
 
     function validateTokens(address collateralToken, address indexToken, bool isLong) private view {
@@ -255,7 +322,28 @@ contract LeveragePool is ReentrancyGuard, Admin, Initializable, UUPSUpgradeable,
         return keccak256(abi.encodePacked(account, collateralToken, indexToken, isLong));
     }
 
-    function TokenToUsd(address collateralToken, uint256 amount) internal view returns(uint256) {
+    function getPositionFee(uint256 sizeDelta) internal view returns(uint256) {
+        if (sizeDelta == 0) {
+            return 0; 
+        }
+        uint256 afterFeeUsd = sizeDelta*(BASIS_POINTS_DIVISOR-(marginFeeBasisPoints))/(BASIS_POINTS_DIVISOR);
+        return sizeDelta - afterFeeUsd;
+    }
+
+    function getFundingFee(address collateralToken, uint256 positionSize, uint256 entryFundingRate) internal view returns(uint256) {
+        if (positionSize == 0) { 
+            return 0;
+        }
+
+        uint256 fundingRate = cumulativeFundingRates[collateralToken] - entryFundingRate;
+        if (fundingRate == 0) { 
+            return 0; 
+        }
+
+        return positionSize * fundingRate / FUNDING_RATE_PRECISION;
+    }
+
+    function tokenToUsdMin(address collateralToken, uint256 amount) internal view returns(uint256) {
         if(amount == 0){
             return 0;
         }
@@ -273,12 +361,127 @@ contract LeveragePool is ReentrancyGuard, Admin, Initializable, UUPSUpgradeable,
         return amount * (10 ** decimal) / price;
     }
 
+    function usdToTokenMin(address collateralToken, uint256 amount) internal view returns(uint256){
+        if(amount == 0){
+            return 0;
+        }
+        uint256 price = getMaxPrice(collateralToken);
+        uint256 decimal = tokenDecimal[collateralToken];
+        return amount * (10 ** decimal) / price;
+    }
+
     function validateLiquidation(address account, address collateralToken, address indexToken, bool isLong) internal view returns (uint256,uint256){
-        //todo
+        Position storage position = positions[getPositionKey(account, collateralToken, indexToken, isLong)];
+        (bool hasProfit, uint256 delta) = getDelta(indexToken, position.positionSize, position.averagePrice, isLong, position.sizeDelta, position.lastUpdateTime);
+
+        uint256 marginFees = getFundingFee(collateralToken, position.positionSize, position.entryFundingRate);
+        marginFees = marginFees + getPositionFee(position.positionSize);
+
+        if (!hasProfit && position.collateral < delta) {
+            revert("losses exceed collateral");
+        }
+
+        // Check if loss exceeds collateral
+        uint256 remainingCollateral = position.collateral;
+        if (!hasProfit) {
+            remainingCollateral = position.collateral - delta;
+        }
+        // Calculate whether the remaining collateral is sufficient to cover the position fee
+        if (remainingCollateral < marginFees) {
+            revert("fees exceed collateral");
+        }
+        // Calculate whether the remaining collateral is sufficient to pay the liquidation fee
+        if (remainingCollateral < marginFees + liquidationFeeUsd) {
+            revert("liquidation fees exceed collateral");
+        }
+        // Check if the maximum leverage is exceeded
+        if (remainingCollateral * maxLeverage < position.positionSize * BASIS_POINTS_DIVISOR) {
+            revert("Vault: maxLeverage exceeded");
+        }
+
+        return (0, marginFees);
+    }
+
+    function getNextAveragePrice(address indexToken, uint256 positionSize, uint256 averagePrice, bool isLong, uint256 price, uint256 sizeDelta, uint256 lastUpdateTime) internal view returns(uint256) {
+        (bool hasProfit, uint256 delta) = getDelta(indexToken, positionSize, averagePrice, isLong, lastUpdateTime);
+        uint256 diverse;
+        uint256 nextSize = positionSize + sizeDelta;
+        if(isLong){
+            diverse = hasProfit ? nextSize + delta : nextSize-delta;
+        }else{
+            diverse = hasProfit ? nextSize - delta : nextSize+delta;
+        }
+
+        return price * nextSize / diverse;
+    }
+
+    function getDelta(address indexToken, uint256 positionSize, uint256 averagePrice, bool isLong, uint256 sizeDelta, uint256 lastUpdateTime) internal view returns(bool, uint256) {
+        require(averagePrice > 0, "averagePrice must great than 0");
+        uint256 price = isLong ? getMinPrice(indexToken) : getMaxPrice(indexToken);
+        uint256 priceDelta = averagePrice > price ? averagePrice-price : price - averagePrice;
+        uint256 delta = positionSize * priceDelta/ averagePrice;
+
+        bool hasProfit;
+
+        if (isLong) { 
+            hasProfit = price > averagePrice;
+        } else {
+            hasProfit = averagePrice > price;
+        }
+
+        // if the minProfitTime has passed then there will be no min profit threshold
+        // the min profit threshold helps to prevent front-running issues
+        uint256 minBps = block.timestamp > lastUpdateTime+(minProfitTime) ? 0 : minProfitBasisPoints[indexToken];
+        if (hasProfit && delta*(BASIS_POINTS_DIVISOR) <= positionSize*(minBps)) {
+            delta = 0;
+        }
+
+        return (hasProfit, delta);
     }
 
     function updateCumulativeFundingRate(address collateralToken) internal {
-        //todo
+        require(fundingInterval > 0, 'fundingInterval didnt init');
+        if(!shouldUpdate) {
+            return;
+        }
+        // Initialize lastFundingTimes
+        if (lastFundingTimes[collateralToken] == 0) {
+            lastFundingTimes[collateralToken] = block.timestamp/fundingInterval*fundingInterval;
+            return;
+        }
+        // Check if the next funding interval has arrived
+        if (lastFundingTimes[collateralToken] +fundingInterval  > block.timestamp) {
+            return;
+        }
+
+        uint256 fundingRate = getNextFundingRate(collateralToken);
+        cumulativeFundingRates[collateralToken] = cumulativeFundingRates[collateralToken]+fundingRate; 
+        lastFundingTimes[collateralToken] = block.timestamp/(fundingInterval)*(fundingInterval);
+
+        emit UpdateFundingRate(collateralToken, cumulativeFundingRates[collateralToken]);
+
+    }
+
+    function getNextFundingRate(address collateralToken) internal view returns(uint256) {
+        uint256 intervals = (block.timestamp-lastFundingTimes[collateralToken])/(fundingInterval);
+        uint256 poolAmount = poolAmounts[collateralToken];
+        if (poolAmount == 0) { return 0; }
+        uint256 _fundingRateFactor = stableTokens[collateralToken] ? stableFundingRateFactor : fundingRateFactor;
+        // Interest needs to be added
+        return _fundingRateFactor*(reservedAmounts[collateralToken])*(intervals)/(poolAmount);
+    }
+
+    function getNextGlobalShortAveragePrice(address indexToken, uint256 nextPrice, uint256 sizeDelta) internal view returns(uint256) {
+        uint256 size = globalShortSizes[indexToken];
+        uint256 averagePrice = globalShortAveragePrices[indexToken];
+        uint256 priceDelta = averagePrice > nextPrice ? averagePrice- nextPrice : nextPrice - averagePrice;
+        uint256 delta = size*(priceDelta)/(averagePrice);
+        bool hasProfit = averagePrice > nextPrice;
+
+        uint256 nextSize = size*(sizeDelta); 
+        uint256 divisor = hasProfit ? nextSize- delta : nextSize + delta;
+
+        return nextPrice * nextSize / divisor;
     }
 
    function _authorizeUpgrade(address newImplementation) internal override{

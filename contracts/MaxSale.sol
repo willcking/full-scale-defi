@@ -769,7 +769,7 @@ contract LeveragePool is ReentrancyGuard,Admin,Initializable,UUPSUpgradeable,Acc
 
 
     function getNextFundingRate(address _token) internal view returns (uint256){
-         if (lastFundingTimes[_token]+fundingInterval > block.timestamp) { return 0; }
+        if (lastFundingTimes[_token]+fundingInterval > block.timestamp) { return 0; }
 
         uint256 intervals = (block.timestamp-lastFundingTimes[_token])/(fundingInterval);
         uint256 poolAmount = poolAmounts[_token];
@@ -876,7 +876,7 @@ contract LeveragePool is ReentrancyGuard,Admin,Initializable,UUPSUpgradeable,Acc
         uint256 delta = size*(priceDelta)/(averagePrice);
         bool hasProfit = averagePrice > _nextPrice;
 
-        uint256 nextSize = size*(_sizeDelta);
+        uint256 nextSize = size*(_sizeDelta); 
         uint256 divisor = hasProfit ? nextSize-(delta) : nextSize+(delta);
 
         return _nextPrice*(nextSize)/(divisor);
