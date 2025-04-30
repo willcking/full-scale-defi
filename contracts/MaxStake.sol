@@ -27,11 +27,12 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
     uint256 public minCollateral;
     uint256 public collateralRate;
     uint256 public paidout;
+    uint256 public MAX_K = 10000;
     address private _owner;
     bool public withdrawPaused;
     bool public claimPaused;
-
-    Pool[] public pools;    
+    Pool[] public pools;
+ 
     // User deposits in the liquidity pool
     mapping(uint256 => mapping(address => User)) userInfo;
     // Record the added liquidity pool
@@ -40,6 +41,7 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
     mapping(address => mapping(address => LendingInfo)) lendingUserInfo;
     // Record user borrowing information
     mapping(address => mapping(address => BorrowingInfo)) borrowingUserInfo;
+    mapping(address => UserNft) kValues;
 
     modifier withdrawUnPaused () {
         require(!withdrawPaused, "withdraw is Paused");
@@ -84,6 +86,22 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
 
         __UUPSUpgradeable_init();
     }
+
+    function getKValues(address _addr) public view returns (uint8, uint256) {
+        UserNft memory userNft = kValues[_addr];
+        return (userNft.level, userNft.kValue);
+    }
+
+    function setKValues(address _addr, uint8 _level, uint256 _kValue) public view {
+        UserNft memory userNft = kValues[_addr];
+        userNft.level = _level;
+        userNft.kValue = _kValue;
+    }
+
+    function getMaxK() public view returns (uint256) {
+        return MAX_K;
+    }
+
 
     // Add liquidity pool
     function addPool(address _tokeAddr, uint256 _poolWeight, uint256 _minDepositAmount, uint256 _minUnstakeAmount, bool isUpdata) external onlyOwner {
@@ -292,6 +310,13 @@ contract MaxStake is IMaxStake,ReentrancyGuard,Initializable,UUPSUpgradeable,Acc
         User storage user = userInfo[pid][msg.sender];
         uint256 userCanBorrowAmt = user.stAmount * collateralRate /100;
         return userCanBorrowAmt;
+    }
+
+    function setTokenUnlockTime(uint256 _pid, address _user, uint256 saleEndTime) external {
+        User storage user = userInfo[_pid][_user];
+        require(user.tokensUnlockTime <= block.timestamp);
+        user.tokensUnlockTime = saleEndTime;
+        user.salesRegistered.push(msg.sender);
     }
 
     function depositLend(uint256 pid, uint256 amount) external nonReentrant validateLend(amount) {

@@ -9,8 +9,6 @@ import "./interface/IERC20Metadata.sol";
 
 contract MaxSale is Admin {
 
-    // Admin contract
-    // 指明这个销售合约归属于哪个admin
     IAdmin public admin;
     IMaxStake public stakeContract;
     // Sale
@@ -36,48 +34,33 @@ contract MaxSale is Admin {
     
 
     // Define the sale struct
-    // 定义销售行为数据结构
     struct Sale {
         // Token being sold;
-        // 需要销售的代币
         IERC20 token;
         // Is sale created
-        // 是否已经创建
         bool isCreated;
         // Are earnings withdrawn
-        // 是否已经赚了收益
         bool earningsWithdrawn;
         // Is leftover withdraw
-        // 未卖出部分
         bool leftoverWithdrawn;
         // Have tokens been deposited
-        // 是否已经保存了代币数量
         bool tokensDeposited;
         // Address of sale owner
-        // 持有人
         address saleOwner;
         // Price of the token quoted in ETH
-        // token 使用ETH的单价
         uint256 tokenPriceInETH;
         // Amount of tokens to sell
-        // 需要销售的代币数量
         uint256 amountOfTokensToSell;
         // Total Token being sold
-        // 已经销售出去的代币数量
         uint256 totalTokensSold;
         // Total ETH Raised
-        // 已经出售代币得到的ETH总金额
         uint256 totalETHRaised;
         // Sale start time
-        // 销售开始时间
         uint256 saleStart;
         // Sale end time
-        // 销售结束时间
         uint256 saleEnd;
         // When tokens can be withdraw
-        // 代币解锁时间,只有超过这个时间，才可以提取剩余的代币
         uint256 tokensUnlockTime;
-        // 最多一次只能购买的数量
         uint256 maxParticipation;
     }
 
@@ -126,12 +109,7 @@ contract MaxSale is Admin {
         _;
     }
 
-    // modifier onlyAdmin override {
-    //     require(isAdmin[msg.sender], "Only admin can call.");
-    //     _;
-    // }
-
-    // // Admin function to set sale parameters
+    // Admin function to set sale parameters
     function setSaleParams(
         address _token,
         address _saleOwner,
@@ -164,8 +142,7 @@ contract MaxSale is Admin {
         emit SaleCreated(sale.saleOwner,sale.tokenPriceInETH,sale.amountOfTokensToSell,sale.saleEnd);
     }
 
-    // // set Vesting Params (maxVestingTimeShift, _percents, _maxVestingTimeShift)
-    // // 设置归属参数
+    // set Vesting Params (maxVestingTimeShift, _percents, _maxVestingTimeShift)
     function setVestingParams(
         uint256[] memory _unlockingTimes,
         uint256[] memory _percents,
@@ -194,8 +171,7 @@ contract MaxSale is Admin {
         require(sum == portionVestingPrecision, "Percent distribution issue");
     }
 
-    // // set ShiftTime for vestingPortionsUnlockTimes. It just can set once
-    // // 动态调整代表的释放时间, 并且确保了只能被调整一次
+    // set ShiftTime for vestingPortionsUnlockTimes. It just can set once
     function shiftVestingUnlockingTimes(uint256 timeToShift)
         external
         onlyAdmin
@@ -212,15 +188,13 @@ contract MaxSale is Admin {
         }
     }
 
-    // //  only can be set when initial contract creation has passed but having no token at that moment
-    // //  只能在初始化已经结束，同时因为当时还没有合适的token下才能被设置 
+    //  only can be set when initial contract creation has passed but having no token at that moment
     function setSaleToken(address _saleToken) external onlyAdmin{
         // TODO 增加校验
         sale.token = IERC20(_saleToken);
     }
 
     // Function to set registration period parameters
-    // 设置注册时间参数, 注册时间必须大于等于当前时间，且必须小于销售结束时间。如果设置了销售开始时间，则注册时间必须在销售开始时间之前
     function setRegistrationParams(uint256 _registrationTimeStarts,uint256 _registrationTimeEnds) external onlyAdmin{
         require(sale.isCreated);
         // only can be set once
@@ -240,7 +214,6 @@ contract MaxSale is Admin {
     }
 
     // set Sale Start Time
-    // 设置销售开始时间
     function setSaleStart(uint256 startTime) external onlyAdmin{
         require(sale.isCreated, "sale is not created");
         require(sale.saleStart == 0, "saleStart is set already");
@@ -252,10 +225,9 @@ contract MaxSale is Admin {
     }
 
     // registration for sale.
-    // 注册销售人员
     function registerForSale(bytes memory signature, uint256 _pid) external {
         require(block.timestamp >= registration.registrationTimeStarts && block.timestamp <= registration.registrationTimeEnds, "registration gate is closed");
-        // require(checkRegistrationSignation(signature, msg.sender),"Invalid signature");
+        require(checkRegistrationSignation(signature, msg.sender),"Invalid signature");
 
         require(!isRegistered[msg.sender], "User can't be register twice");
         isRegistered[msg.sender] = true;
@@ -274,7 +246,6 @@ contract MaxSale is Admin {
     }
 
     // postpone the sale
-    // 推迟销售开始时间
     function postponeSale(uint256 timeToShift) external onlyAdmin{
         require(block.timestamp < sale.saleStart, "sale already start");
 
@@ -287,7 +258,6 @@ contract MaxSale is Admin {
     }
 
     // extend registration period
-    // 增加注册周期
     function extendRegisttrationPeriod(uint256 timeToAdd) external onlyAdmin {
         require(registration.registrationTimeEnds + timeToAdd < sale.saleStart,"Registration period over than saleStart" );
 
@@ -311,10 +281,9 @@ contract MaxSale is Admin {
     }
 
 
-    function participate(bytes memory signature,uint256 amount) external payable {
+    function participate(uint256 amount) external payable {
         require(amount <= sale.maxParticipation,"Overflow maximal participation for sale");
         require(isRegistered[msg.sender], "Not registered for this sale");
-        // require(checkPartcipationSignature(signature,msg.sender,amount),"Invalid signature. Verification failed");
         require(!isParticiparted[msg.sender], "User can participate only once.");
         
         uint256 amountOfTokenBuying = msg.value * (10 ** IERC20Metadata(address(sale.token)).decimals()) / sale.tokenPriceInETH;

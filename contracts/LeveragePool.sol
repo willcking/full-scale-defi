@@ -20,6 +20,7 @@ contract LeveragePool is ReentrancyGuard, Admin, Initializable, UUPSUpgradeable,
         uint256 averagePrice;
         uint256 entryFundingRate;
         uint256 lastUpdateTime;
+        uint256 reserveAmount;
     }
 
     IPoolPriceFeed iPoolPriceFeed;
@@ -169,7 +170,7 @@ contract LeveragePool is ReentrancyGuard, Admin, Initializable, UUPSUpgradeable,
 
         updateCumulativeFundingRate(collateralToken);
 
-        bytes key = getPositionKey(account, collateralToken, indexToken, isLong);
+        bytes32 key = getPositionKey(account, collateralToken, indexToken, isLong);
         Position storage position = positions[key];
         
         uint256 price = isLong ? getMaxPrice(indexToken) : getMinPrice(indexToken);
@@ -372,7 +373,7 @@ contract LeveragePool is ReentrancyGuard, Admin, Initializable, UUPSUpgradeable,
 
     function validateLiquidation(address account, address collateralToken, address indexToken, bool isLong) internal view returns (uint256,uint256){
         Position storage position = positions[getPositionKey(account, collateralToken, indexToken, isLong)];
-        (bool hasProfit, uint256 delta) = getDelta(indexToken, position.positionSize, position.averagePrice, isLong, position.sizeDelta, position.lastUpdateTime);
+        (bool hasProfit, uint256 delta) = getDelta(indexToken, position.positionSize, position.averagePrice, isLong, position.lastUpdateTime);
 
         uint256 marginFees = getFundingFee(collateralToken, position.positionSize, position.entryFundingRate);
         marginFees = marginFees + getPositionFee(position.positionSize);
@@ -415,7 +416,7 @@ contract LeveragePool is ReentrancyGuard, Admin, Initializable, UUPSUpgradeable,
         return price * nextSize / diverse;
     }
 
-    function getDelta(address indexToken, uint256 positionSize, uint256 averagePrice, bool isLong, uint256 sizeDelta, uint256 lastUpdateTime) internal view returns(bool, uint256) {
+    function getDelta(address indexToken, uint256 positionSize, uint256 averagePrice, bool isLong, uint256 lastUpdateTime) internal view returns(bool, uint256) {
         require(averagePrice > 0, "averagePrice must great than 0");
         uint256 price = isLong ? getMinPrice(indexToken) : getMaxPrice(indexToken);
         uint256 priceDelta = averagePrice > price ? averagePrice-price : price - averagePrice;

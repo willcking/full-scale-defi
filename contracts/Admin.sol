@@ -20,7 +20,7 @@ contract Admin is IAdmin {
         }
     }
 
-    function addAdmin(address newAdmin) external onlyAdmin {
+    function addAdmin(address newAdmin) public onlyAdmin {
         require(newAdmin != address(0), "admin can't be 0");
         require(!isAdmin[newAdmin], "the address arleady is admin");
         admins.push(newAdmin);

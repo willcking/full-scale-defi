@@ -7,6 +7,8 @@ interface IMaxStake {
         uint256 stAmount;
         uint256 finishedAmount;
         uint256 pendingAmount;
+        uint256 tokensUnlockTime;
+        address [] salesRegistered;
     }
 
     struct Pool {
@@ -33,6 +35,11 @@ interface IMaxStake {
         uint256 accumulateInterest;
     }
 
+    struct UserNft {
+        uint8 level;
+        uint256 kValue;
+    }
+
     event Stake(uint256 pid,uint256 amount);
     event Withdraw(uint256 pid,uint256 amount);
     event Reward(uint256 pid);
@@ -49,4 +56,9 @@ interface IMaxStake {
     event ClaimBorrow(uint256 pid);
     event Redeem(uint256 pid,uint256 borrowingAmount,uint256 accumulateInterest,address receiver);
     event Settle(uint256 pid,uint256 landingAmount,uint256 totalInterest,address receiver);
+
+    function setTokenUnlockTime(uint256 _pid, address _user, uint256 _unlockTime) external;
+    function getKValues(address user) external view returns (uint8 level, uint256 kValue);
+    function getMaxK() external view returns (uint256);
+    function setKValues(address user, uint8 level, uint256 kValue) external;
 }
